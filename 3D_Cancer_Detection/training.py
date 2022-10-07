@@ -48,6 +48,28 @@ class LunaTrainingApp:
         self.cli_args = parser.parse_args(sys_argv)
         self.time_str = datetime.datetime.now().strftime('%Y-%m-%d_%H.%M.%S')
 
+      #  self.use_cuda = torch.cuda.is_available()
+       # self.device = torch.device("cuda" if self.use_cuda else "cpu")
+        self.use_mps1 = torch.backends.mps.is_available()
+        self.use_mps2 = torch.backends.mps.is_built()
+        self.device = torch.device("mps" if self.use_mps1 and self.use_mps2 else "cpu")
+
+        self.model = self.initModel()
+        self.optimizer = self.initOptimizer()
+        
+
+    def initModel(self):
+        print(self.device)
+        model = LunaModel()
+        if self.use_mps1 and self.use_mps2:
+            log.info("Using Apple's M1 chip as a GPU device.")
+            #    model = nn.DataParallel(model)
+            model = model.to(self.device)
+        return model
+
+    def initOptimizer(self):
+        return SGD(self.model.parameters(), lr=0.001, momentum=0.99)
+
 
     def main(self):
         log.info("Starting {}, {}".format(type(self).__name__, self.cli_args))
