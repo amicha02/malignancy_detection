@@ -59,7 +59,6 @@ class LunaTrainingApp:
         
 
     def initModel(self):
-        print(self.device)
         model = LunaModel()
         if self.use_mps1 and self.use_mps2:
             log.info("Using Apple's M1 chip as a GPU device.")
