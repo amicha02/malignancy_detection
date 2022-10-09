@@ -39,6 +39,11 @@ class LunaTrainingApp:
             default=8,
             type=int,
         )
+        parser.add_argument('--batch-size',
+            help='Batch size to use for training',
+            default=32,
+            type=int,
+        )
         parser.add_argument('--epochs',
             help='Number of epochs to train for',
             default=1,
@@ -69,10 +74,48 @@ class LunaTrainingApp:
     def initOptimizer(self):
         return SGD(self.model.parameters(), lr=0.001, momentum=0.99)
 
+    def initTrainDl(self):
+        train_ds = LunaDataset(
+            val_stride=10,
+            isValSet_bool=False,
+        )
+
+        batch_size = self.cli_args.batch_size
+     #   if self.use_cuda:
+     #       batch_size *= torch.cuda.device_count()
+
+        train_dl = DataLoader(
+            train_ds,
+            batch_size=batch_size,
+            num_workers=self.cli_args.num_workers,
+            pin_memory=(self.use_mps1 and self.use_mps2) ,
+        )
+
+        return train_dl
+
+    def initValDl(self):
+        val_ds = LunaDataset(
+            val_stride=10,
+            isValSet_bool=True,
+        )
+
+        batch_size = self.cli_args.batch_size
+      #  if self.use_cuda:
+      #      batch_size *= torch.cuda.device_count()
+
+        val_dl = DataLoader(
+            val_ds,
+            batch_size=batch_size,
+            num_workers=self.cli_args.num_workers,
+            pin_memory= (self.use_mps1 and self.use_mps2),
+        )
+
+        return val_dl
 
     def main(self):
         log.info("Starting {}, {}".format(type(self).__name__, self.cli_args))
-
+        train_dl = self.initTrainDl()
+        val_dl = self.initValDl()
     
 
 if __name__ == '__main__':
