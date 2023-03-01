@@ -35,11 +35,11 @@ def getCandidateInfoList(requireOnDisk_bool=True):
     # We construct a set with all series_uids that are present on disk.
     # This will let us use the data, even if we haven't downloaded all of
     # the subsets yet.
-    mhd_list = glob.glob('../../LUNA/subset*/*.mhd')
+    mhd_list = glob.glob('../LUNA/subset*/*.mhd')
     presentOnDisk_set = {os.path.split(p)[-1][:-4] for p in mhd_list}
 
     diameter_dict = {}
-    with open('../../LUNA/annotations.csv', "r") as f:
+    with open('../LUNA/annotations.csv', "r") as f:
         for row in list(csv.reader(f))[1:]:
             series_uid = row[0]
             annotationCenter_xyz = tuple([float(x) for x in row[1:4]])
@@ -50,7 +50,7 @@ def getCandidateInfoList(requireOnDisk_bool=True):
             )
 
     candidateInfo_list = []
-    with open('../../LUNA/candidates.csv', "r") as f:
+    with open('../LUNA/candidates.csv', "r") as f:
         for row in list(csv.reader(f))[1:]:
             series_uid = row[0]
 
@@ -84,7 +84,7 @@ def getCandidateInfoList(requireOnDisk_bool=True):
 class Ct:
     def __init__(self, series_uid):
         mhd_path = glob.glob(
-            '../../LUNA/subset*/{}.mhd'.format(series_uid)
+            '../LUNA/subset*/{}.mhd'.format(series_uid)
         )[0]
 
         ct_mhd = sitk.ReadImage(mhd_path)
