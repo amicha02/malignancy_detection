@@ -156,8 +156,8 @@ class LunaTrainingApp:
                 self.cli_args.batch_size,
                 1,
             ))
-            
             trnMetrics_t = self.doTraining(epoch_ndx, train_dl)
+            print(trnMetrics_t)
             self.logMetrics(epoch_ndx, 'trn', trnMetrics_t)
 
             valMetrics_t = self.doValidation(epoch_ndx, val_dl)
@@ -229,14 +229,6 @@ class LunaTrainingApp:
 
         return valMetrics_g.to('cpu')
     
-    
-    
-    
-    
-    
-    
-    
-    
     def computeBatchLoss(self, batch_ndx, batch_tup, batch_size, metrics_g):
         input_t, label_t, _series_list, _center_list = batch_tup
 
@@ -261,6 +253,10 @@ class LunaTrainingApp:
             loss_g.detach()
 
         return loss_g.mean()
+    
+
+
+
     def logMetrics(
             self,
             epoch_ndx,
@@ -299,9 +295,23 @@ class LunaTrainingApp:
         metrics_dict['correct/neg'] = neg_correct / np.float32(neg_count) * 100
         metrics_dict['correct/pos'] = pos_correct / np.float32(pos_count) * 100
 
+        #Improved metrics 
+        precision = metrics_dict['pr/precision'] = \
+            truePos_count / np.float32(truePos_count + falsePos_count)
+        recall    = metrics_dict['pr/recall'] = \
+            truePos_count / np.float32(truePos_count + falseNeg_count)
+
+        metrics_dict['pr/f1_score'] = \
+            2 * (precision * recall) / (precision + recall)
+        
+
+
         log.info(
             ("E{} {:8} {loss/all:.4f} loss, "
                  + "{correct/all:-5.1f}% correct, "
+                 + "{pr/precision:.4f} precision, "
+                 + "{pr/recall:.4f} recall, "
+                 + "{pr/f1_score:.4f} f1 score"
             ).format(
                 epoch_ndx,
                 mode_str,

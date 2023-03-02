@@ -37,18 +37,15 @@ def getCandidateInfoList(requireOnDisk_bool=True):
     # the subsets yet.
     mhd_list = glob.glob('../LUNA/subset*/*.mhd')
     presentOnDisk_set = {os.path.split(p)[-1][:-4] for p in mhd_list}
-
     diameter_dict = {}
     with open('../LUNA/annotations.csv', "r") as f:
         for row in list(csv.reader(f))[1:]:
             series_uid = row[0]
             annotationCenter_xyz = tuple([float(x) for x in row[1:4]])
             annotationDiameter_mm = float(row[4])
-
             diameter_dict.setdefault(series_uid, []).append(
                 (annotationCenter_xyz, annotationDiameter_mm),
             )
-
     candidateInfo_list = []
     with open('../LUNA/candidates.csv', "r") as f:
         for row in list(csv.reader(f))[1:]:
