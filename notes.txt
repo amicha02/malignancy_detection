@@ -1,0 +1,9 @@
+File "/Users/egads1/Desktop/pytorch_projects/.venv/lib/python3.8/site-packages/torch/utils/tensorboard/summary.py", line 386, in make_histogram
+    cum_counts = np.cumsum(np.greater(counts, 0, dtype=np.int32))
+
+
+
+
+    2023-03-08 14:07:23,790 INFO     pid:70013 training:275:logMetrics E1 LunaTrainingApp
+/Users/egads1/Desktop/pytorch_projects/3D_Cancer_Detection/training.py:311: RuntimeWarning: invalid value encountered in divide
+  truePos_count / np.float32(truePos_count + falsePos_count)

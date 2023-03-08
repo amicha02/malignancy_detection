@@ -1,9 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[ ]:
-
-
 import datetime
 from util.util import importstr
 from util.logconf import logging
@@ -35,6 +29,6 @@ def cleanCache():
 
 if __name__ == "__main__":
     #cleanCache()
-   #run('prepcache.LunaPrepCacheApp')
+    run('prepcache.LunaPrepCacheApp')
     run('training.LunaTrainingApp', '--epochs=1')
 

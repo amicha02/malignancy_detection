@@ -86,7 +86,7 @@ class LunaTrainingApp:
             log.info("Using Apple's M1 chip as a GPU device.")
             #    model = nn.DataParallel(model)
             model = model.to(self.device)
-            print('Successfully transfered model to device')
+           # print('Successfully transfered model to device')
         return model
 
     def initOptimizer(self):
@@ -157,7 +157,7 @@ class LunaTrainingApp:
                 1,
             ))
             trnMetrics_t = self.doTraining(epoch_ndx, train_dl)
-            print(trnMetrics_t)
+            #print(trnMetrics_t)
             self.logMetrics(epoch_ndx, 'trn', trnMetrics_t)
 
             valMetrics_t = self.doValidation(epoch_ndx, val_dl)
@@ -203,7 +203,7 @@ class LunaTrainingApp:
             #         model = LunaModel()
             #         self.trn_writer.add_graph(model, batch_tup[0], verbose=True)
             #         self.trn_writer.close()
-        print("Finished batch iteration")
+            #print("Finished batch iteration")
         self.totalTrainingSamples_count += len(train_dl.dataset)
 
         return trnMetrics_g.to('cpu')
@@ -229,6 +229,13 @@ class LunaTrainingApp:
 
         return valMetrics_g.to('cpu')
     
+
+
+
+
+
+
+
     def computeBatchLoss(self, batch_ndx, batch_tup, batch_size, metrics_g):
         input_t, label_t, _series_list, _center_list = batch_tup
 
@@ -279,8 +286,12 @@ class LunaTrainingApp:
         neg_count = int(negLabel_mask.sum())
         pos_count = int(posLabel_mask.sum())
 
-        neg_correct = int((negLabel_mask & negPred_mask).sum())
-        pos_correct = int((posLabel_mask & posPred_mask).sum())
+        trueNeg_count = neg_correct = int((negLabel_mask & negPred_mask).sum())
+        truePos_count = pos_correct = int((posLabel_mask & posPred_mask).sum())
+
+        falsePos_count = neg_count - neg_correct
+        falseNeg_count = pos_count - pos_correct
+
 
         metrics_dict = {}
         metrics_dict['loss/all'] = \
