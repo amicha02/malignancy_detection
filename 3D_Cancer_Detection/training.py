@@ -11,7 +11,6 @@ import torch
 import torch.nn as nn
 from torch.optim import SGD, Adam
 from torch.utils.data import DataLoader
-
 from util.util import enumerateWithEstimate
 from dsets import LunaDataset
 from util.logconf import logging
@@ -49,7 +48,11 @@ class LunaTrainingApp:
             default=1,
             type=int,
         )
-
+        parser.add_argument('--balanced',
+            help="Balance the training data to half positive, half negative.",
+            action='store_true',
+            default=False,
+        )
         parser.add_argument('--tb-prefix',
             default='p2ch11',
             help="Data prefix to use for Tensorboard run. Defaults to chapter.",
@@ -96,12 +99,13 @@ class LunaTrainingApp:
         train_ds = LunaDataset(
             val_stride=10,
             isValSet_bool=False,
+            ratio_int= int(self.cli_args.balanced),
         )
 
         batch_size = self.cli_args.batch_size
      #   if self.use_cuda:
      #       batch_size *= torch.cuda.device_count()
-
+        print(batch_size)
         train_dl = DataLoader(
             train_ds,
             batch_size=batch_size,
@@ -144,6 +148,7 @@ class LunaTrainingApp:
         log.info("Starting {}, {}".format(type(self).__name__, self.cli_args))
 
         train_dl = self.initTrainDl()
+       #print(train_dl)
         val_dl = self.initValDl()
         
         for epoch_ndx in range(1, self.cli_args.epochs + 1):
@@ -229,10 +234,6 @@ class LunaTrainingApp:
 
         return valMetrics_g.to('cpu')
     
-
-
-
-
 
 
 
