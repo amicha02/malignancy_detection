@@ -45,19 +45,48 @@ class LunaTrainingApp:
         )
         parser.add_argument('--epochs',
             help='Number of epochs to train for',
-            default=1,
+            default=5,
             type=int,
         )
         parser.add_argument('--balanced',
             help="Balance the training data to half positive, half negative.",
             action='store_true',
-            default=False,
+            default=True,
         )
         parser.add_argument('--tb-prefix',
             default='p2ch11',
             help="Data prefix to use for Tensorboard run. Defaults to chapter.",
         )
-
+        parser.add_argument('--augmented',
+            help="Augment the training data.",
+            action='store_true',
+            default=False,
+        )
+        parser.add_argument('--augment-flip',
+            help="Augment the training data by randomly flipping the data left-right, up-down, and front-back.",
+            action='store_true',
+            default=False,
+        )
+        parser.add_argument('--augment-offset',
+            help="Augment the training data by randomly offsetting the data slightly along the X and Y axes.",
+            action='store_true',
+            default=False,
+        )
+        parser.add_argument('--augment-scale',
+            help="Augment the training data by randomly increasing or decreasing the size of the candidate.",
+            action='store_true',
+            default=False,
+        )
+        parser.add_argument('--augment-rotate',
+            help="Augment the training data by randomly rotating the data around the head-foot axis.",
+            action='store_true',
+            default=False,
+        )
+        parser.add_argument('--augment-noise',
+            help="Augment the training data by randomly adding noise to the data.",
+            action='store_true',
+            default=False,
+        )
         parser.add_argument('comment',
             help="Comment suffix for Tensorboard run.",
             nargs='?',
@@ -73,6 +102,18 @@ class LunaTrainingApp:
 
       #  self.use_cuda = torch.cuda.is_available()
        # self.device = torch.device("cuda" if self.use_cuda else "cpu")
+        
+        self.augmentation_dict = {}
+        if self.cli_args.augmented or self.cli_args.augment_flip:
+            self.augmentation_dict['flip'] = True
+        if self.cli_args.augmented or self.cli_args.augment_offset:
+            self.augmentation_dict['offset'] = 0.1
+        if self.cli_args.augmented or self.cli_args.augment_scale:
+            self.augmentation_dict['scale'] = 0.2
+        if self.cli_args.augmented or self.cli_args.augment_rotate:
+            self.augmentation_dict['rotate'] = True
+        if self.cli_args.augmented or self.cli_args.augment_noise:
+            self.augmentation_dict['noise'] = 25.0
 
         self.use_mps1 = torch.backends.mps.is_available()
         self.use_mps2 = torch.backends.mps.is_built()
@@ -105,7 +146,7 @@ class LunaTrainingApp:
         batch_size = self.cli_args.batch_size
      #   if self.use_cuda:
      #       batch_size *= torch.cuda.device_count()
-        print(batch_size)
+        #print(batch_size)
         train_dl = DataLoader(
             train_ds,
             batch_size=batch_size,
@@ -283,10 +324,10 @@ class LunaTrainingApp:
 
         posLabel_mask = ~negLabel_mask
         posPred_mask = ~negPred_mask
-
+        print(mode_str)
         neg_count = int(negLabel_mask.sum())
         pos_count = int(posLabel_mask.sum())
-
+        #print(pos_count)
         trueNeg_count = neg_correct = int((negLabel_mask & negPred_mask).sum())
         truePos_count = pos_correct = int((posLabel_mask & posPred_mask).sum())
 

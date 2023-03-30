@@ -47,9 +47,6 @@ for epoch in range(num_epochs):
 #print(first_sample)
 #print(len(dataset))
 
- 
-
-
 
 
 
