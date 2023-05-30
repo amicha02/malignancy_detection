@@ -12,6 +12,7 @@ import numpy as np
 
 import torch
 import torch.cuda
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 from util.disk import getCache
@@ -25,12 +26,10 @@ log = logging.getLogger(__name__)
 # log.setLevel(logging.INFO)
 log.setLevel(logging.DEBUG)
 
+raw_cache = getCache('part2ch13_raw')
 
-
-CandidateInfoTuple = namedtuple(
-    'CandidateInfoTuple',
-    'isNodule_bool, diameter_mm, series_uid, center_xyz',
-)
+MaskTuple = namedtuple('MaskTuple', 'raw_dense_mask, dense_mask, body_mask, air_mask, raw_candidate_mask, candidate_mask, lung_mask, neg_mask, pos_mask')
+CandidateInfoTuple = namedtuple('CandidateInfoTuple', 'isNodule_bool, hasAnnotation_bool, isMal_bool, diameter_mm, series_uid, center_xyz')
 
 @functools.lru_cache(1)
 def getCandidateInfoList(requireOnDisk_bool=True):
@@ -39,16 +38,27 @@ def getCandidateInfoList(requireOnDisk_bool=True):
     # the subsets yet.
     mhd_list = glob.glob('../LUNA/subset*/*.mhd')
     presentOnDisk_set = {os.path.split(p)[-1][:-4] for p in mhd_list}
-    diameter_dict = {}
-    with open('../LUNA/annotations.csv', "r") as f:
+    
+    candidateInfo_list = []
+    mal_bool_values = []
+    with open('../LUNA/annotations_with_malignancy.csv', "r") as f:
         for row in list(csv.reader(f))[1:]:
             series_uid = row[0]
             annotationCenter_xyz = tuple([float(x) for x in row[1:4]])
             annotationDiameter_mm = float(row[4])
-            diameter_dict.setdefault(series_uid, []).append(
-                (annotationCenter_xyz, annotationDiameter_mm),
+            isMal_bool = {'0.0': False, '1.0': True}[row[5]]
+
+            candidateInfo_list.append(
+                CandidateInfoTuple(
+                    True, #isNodule_bool
+                    True, #hasAnnotation_bool
+                    isMal_bool,
+                    annotationDiameter_mm,
+                    series_uid,
+                    annotationCenter_xyz,
+                )
             )
-    candidateInfo_list = []
+    #print(candidateInfo_list)
     with open('../LUNA/candidates.csv', "r") as f:
         for row in list(csv.reader(f))[1:]:
             series_uid = row[0]
@@ -59,33 +69,39 @@ def getCandidateInfoList(requireOnDisk_bool=True):
             isNodule_bool = bool(int(row[4]))
             candidateCenter_xyz = tuple([float(x) for x in row[1:4]])
 
-            candidateDiameter_mm = 0.0
-            for annotation_tup in diameter_dict.get(series_uid, []):
-                annotationCenter_xyz, annotationDiameter_mm = annotation_tup
-                for i in range(3):
-                    delta_mm = abs(candidateCenter_xyz[i] - annotationCenter_xyz[i])
-                    if delta_mm > annotationDiameter_mm / 4:
-                        break
-                else:
-                    candidateDiameter_mm = annotationDiameter_mm
-                    break
-
-            candidateInfo_list.append(CandidateInfoTuple(
-                isNodule_bool,
-                candidateDiameter_mm,
-                series_uid,
-                candidateCenter_xyz,
-            ))
+            if not isNodule_bool: #only focused on non-nodules
+                candidateInfo_list.append(CandidateInfoTuple(
+                    False, #isNodule_bool
+                    False, #hasAnnotation_bool
+                    False, #isMal_bool
+                    0.0,
+                    series_uid,
+                    candidateCenter_xyz,
+                    )
+                )
 
     candidateInfo_list.sort(reverse=True)
+    #print(candidateInfo_list)
     return candidateInfo_list
+
+
+@functools.lru_cache(1) #<from7>
+def getCandidateInfoDict(requireOnDisk_bool=True):
+    candidateInfo_list = getCandidateInfoList(requireOnDisk_bool)
+    candidateInfo_dict = {}
+
+    for candidateInfo_tup in candidateInfo_list:
+        candidateInfo_dict.setdefault(candidateInfo_tup.series_uid,
+                                      []).append(candidateInfo_tup)
+    return candidateInfo_dict #<to7>
+        
+
 
 class Ct:
     def __init__(self, series_uid):
         mhd_path = glob.glob(
             '../LUNA/subset*/{}.mhd'.format(series_uid)
         )[0]
-
         ct_mhd = sitk.ReadImage(mhd_path)
         ct_a = np.array(sitk.GetArrayFromImage(ct_mhd), dtype=np.float32)
 
@@ -101,6 +117,74 @@ class Ct:
         self.origin_xyz = XyzTuple(*ct_mhd.GetOrigin())
         self.vxSize_xyz = XyzTuple(*ct_mhd.GetSpacing())
         self.direction_a = np.array(ct_mhd.GetDirection()).reshape(3, 3)
+
+        #<from6>
+        candidateInfo_list = getCandidateInfoDict()[self.series_uid]
+        
+        self.positiveInfo_list = [
+            candidate_tup
+            for candidate_tup in candidateInfo_list
+            if candidate_tup.isNodule_bool
+        ]
+        self.positive_mask = self.buildAnnotationMask(self.positiveInfo_list)
+        self.positive_indexes = (self.positive_mask.sum(axis=(1,2))
+                                 .nonzero()[0].tolist())
+                            
+        #<to6>
+
+    def dummy(self):
+        x = 0
+        return x
+    
+
+    def buildAnnotationMask(self, positiveInfo_list, threshold_hu = -700):
+        boundingBox_a = np.zeros_like(self.hu_a, dtype=np.bool_)
+        
+        for candidateInfo_tup in positiveInfo_list:
+            #<5from>
+            center_irc = xyz2irc(
+                candidateInfo_tup.center_xyz,
+                self.origin_xyz,
+                self.vxSize_xyz,
+                self.direction_a,
+                )
+            ci = int(center_irc.index)
+            cr = int(center_irc.row)
+            cc = int(center_irc.col)
+            ### INDEX DIRECTION ###
+            index_radius = 2
+            try:
+                while self.hu_a[ci + index_radius, cr, cc] > threshold_hu and \
+                    self.hu_a[ci - index_radius, cr, cc] > threshold_hu:
+                    index_radius += 1
+            except IndexError:
+                index_radius -= 1
+            #<5to>
+            ### ROW DIRECTION ###
+            row_radius = 2
+            try:
+                while self.hu_a[ci, cr + row_radius, cc] > threshold_hu and \
+                    self.hu_a[ci, cr - row_radius, cc] > threshold_hu:
+                    row_radius += 1
+            except IndexError:
+                row_radius -= 1
+            ### COLUMN DIRECTION ###
+            col_radius = 2
+            try:
+                while self.hu_a[ci, cr, cc + col_radius] > threshold_hu and \
+                    self.hu_a[ci, cr, cc - col_radius] > threshold_hu:
+                    col_radius += 1
+            except IndexError:
+                col_radius -= 1
+
+            boundingBox_a[
+                 ci - index_radius: ci + index_radius + 1,
+                 cr - row_radius: cr + row_radius + 1,
+                 cc - col_radius: cc + col_radius + 1] = True
+
+        mask_a = boundingBox_a & (self.hu_a > threshold_hu)
+
+        return mask_a 
 
     def getRawCandidate(self, center_xyz, width_irc):
         center_irc = xyz2irc(
@@ -130,10 +214,11 @@ class Ct:
                 start_ndx = int(self.hu_a.shape[axis] - width_irc[axis])
 
             slice_list.append(slice(start_ndx, end_ndx))
-
+        #<from8>
         ct_chunk = self.hu_a[tuple(slice_list)]
-
-        return ct_chunk, center_irc
+        pos_chunk = self.positive_mask[tuple(slice_list)]
+        return ct_chunk, pos_chunk, center_irc
+        #<to8>
 
 
 @functools.lru_cache(1, typed=True)
@@ -143,201 +228,114 @@ def getCt(series_uid):
 @raw_cache.memoize(typed=True)
 def getCtRawCandidate(series_uid, center_xyz, width_irc):
     ct = getCt(series_uid)
-    ct_chunk, center_irc = ct.getRawCandidate(center_xyz, width_irc)
-    return ct_chunk, center_irc
+    ct_chunk, pos_chunk, center_irc = ct.getRawCandidate(center_xyz, width_irc)
+    ct_chunk.clip(-1000, 1000, ct_chunk)
+    return ct_chunk, pos_chunk, center_irc
+
+@raw_cache.memoize(typed=True)
+def getCtSampleSize(series_uid):
+    ct = Ct(series_uid)
+    return int(ct.hu_a.shape[0]), ct.positive_indexes
 
 
-def getCtAugmentedCandidate(
-        augmentation_dict,
-        series_uid, center_xyz, width_irc,
-        use_cache=True):
-    if use_cache:
-        ct_chunk, center_irc = \
-            getCtRawCandidate(series_uid, center_xyz, width_irc)
-    else:
-        ct = getCt(series_uid)
-        ct_chunk, center_irc = ct.getRawCandidate(center_xyz, width_irc)
-    ct_t = torch.tensor(ct_chunk).unsqueeze(0).unsqueeze(0).to(torch.float32) #
-    transform_t = torch.eye(4)
-
-
-    for i in range(3):
-        if 'flip' in augmentation_dict:
-            if random.random() > 0.5:
-                transform_t[i,i] *= -1
-
-        if 'offset' in augmentation_dict:
-            offset_float = augmentation_dict['offset']
-            random_float = (random.random() * 2 - 1)
-            transform_t[i,3] = offset_float * random_float
-
-        if 'scale' in augmentation_dict:
-            scale_float = augmentation_dict['scale']
-            random_float = (random.random() * 2 - 1)
-            transform_t[i,i] *= 1.0 + scale_float * random_float
-
-
-        if 'rotate' in augmentation_dict:
-            angle_rad = random.random() * math.pi * 2
-            s = math.sin(angle_rad)
-            c = math.cos(angle_rad)
-
-            rotation_t = torch.tensor([
-            [c, -s, 0, 0],
-            [s, c, 0, 0],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1],
-        ])
-
-        transform_t @= rotation_t
-
-    affine_t = F.affine_grid(
-        transform_t[:3].unsqueeze(0).to(torch.float32), ct_t.size(),
-        align_corners=False,
-        )
-    augmented_chunk = F.grid_sample(
-        ct_t,
-        affine_t,
-        padding_mode='border',
-        align_corners=False,
-    ).to('cpu')
-
-    if 'noise' in augmentation_dict:
-        noise_t = torch.randn_like(augmented_chunk)
-        noise_t *= augmentation_dict['noise']
-
-        augmented_chunk += noise_t
-    return augmented_chunk[0], center_irc
-
-
-
-
-
-class LunaDataset(Dataset):
+class Luna2dSegmentationDataset(Dataset):
     def __init__(self,
-                 val_stride=0,
-                 isValSet_bool=None,
-                 series_uid=None,
-                 sortby_str='random',
-                 ratio_int=2,
-                 candidateInfo_list=None
+                val_stride=0,
+                isValSet_bool=None,
+                series_uid=None,
+                contextSlices_count=3,
+                fullCt_bool = False,
             ):
+        self.contextSlices_count = contextSlices_count
+        self.fullCt_bool = fullCt_bool
 
-        self.ratio_int = ratio_int
-        if candidateInfo_list:
-            self.candidateInfo_list = copy.copy(candidateInfo_list)
-            self.use_cache = False
-        else:
-            self.candidateInfo_list = copy.copy(getCandidateInfoList())
-            self.use_cache = True
-        
-      
         if series_uid:
-            self.candidateInfo_list = [
-                x for x in self.candidateInfo_list if x.series_uid == series_uid
-            ]
-
-
-
-
-        if isValSet_bool:
-            assert val_stride > 0, val_stride
-            self.candidateInfo_list = self.candidateInfo_list[::val_stride]
-            assert self.candidateInfo_list
-        elif val_stride > 0:
-            del self.candidateInfo_list[::val_stride]
-            assert self.candidateInfo_list
-
-        if sortby_str == 'random':
-            random.shuffle(self.candidateInfo_list)
-        elif sortby_str == 'series_uid':
-            self.candidateInfo_list.sort(key=lambda x: (x.series_uid, x.center_xyz))
-        elif sortby_str == 'label_and_size':
-            pass
+            self.series_list = [series_uid]
         else:
-            raise Exception("Unknown sort: " + repr(sortby_str))
-        
+            self.series_list = sorted(getCandidateInfoDict().keys())
 
-        self.negative_list = [
-            nt for nt in self.candidateInfo_list if not nt.isNodule_bool
-        ]
-        self.pos_list = [
-            nt for nt in self.candidateInfo_list if nt.isNodule_bool #<3>
-        ]
+        if isValSet_bool: #<1>
+            assert val_stride > 0, val_stride
+            self.series_list = self.series_list[::val_stride]
+            assert self.series_list
+        elif val_stride > 0:
+            del self.series_list[::val_stride]
+            assert self.series_list
 
-        log.info("{!r}: {} {} samples, {} neg, {} pos, {} ratio".format(
+        self.sample_list = [] #<2>
+        for series_uid in self.series_list:
+            index_count, positive_indexes = getCtSampleSize(series_uid)
+            if self.fullCt_bool:
+                self.sample_list += [(series_uid, slice_ndx)
+                                     for slice_ndx in range(index_count)]
+            else:
+                self.sample_list += [(series_uid, slice_ndx)
+                                     for slice_ndx in positive_indexes]
+                
+        self.candidateInfo_list = getCandidateInfoList() #<3>
+        series_set = set(self.series_list)
+        self.candidateInfo_list = [cit for cit in self.candidateInfo_list
+                                   if cit.series_uid in series_set]
+
+        self.pos_list = [nt for nt in self.candidateInfo_list
+                            if nt.isNodule_bool]
+        log.info("{!r}: {} {} series, {} slices, {} nodules".format(
             self,
-            len(self.candidateInfo_list),
-            "validation" if isValSet_bool else "training",
-            len(self.negative_list),
+            len(self.series_list),
+            {None: 'general', True: 'validation', False: 'training'}[isValSet_bool],
+            len(self.sample_list),
             len(self.pos_list),
-            '{}:1'.format(self.ratio_int) if self.ratio_int else 'unbalanced'
         ))
 
-
-
-
-    def shuffleSamples(self): #<4>
-        if self.ratio_int:
-            random.shuffle(self.negative_list)
-            random.shuffle(self.pos_list)
-
     def __len__(self):
-        if self.ratio_int:
-            return 200000
-        else:
-            return len(self.candidateInfo_list)
-
-    def __getitem__(self, ndx):
-        #candidateInfo_tup = self.candidateInfo_list[ndx] #1
+        return len(self.sample_list)
         
-        if self.ratio_int:
-            pos_ndx = ndx // (self.ratio_int + 1)
-
-            if ndx % (self.ratio_int + 1):
-                neg_ndx = ndx - 1 - pos_ndx
-                neg_ndx %= len(self.negative_list)
-                candidateInfo_tup = self.negative_list[neg_ndx]
-            else:
-                pos_ndx %= len(self.pos_list)
-                candidateInfo_tup = self.pos_list[pos_ndx]
-        else:
-            candidateInfo_tup = self.candidateInfo_list[ndx]
-
-
-        width_irc = (32, 48, 48)
-        if self.use_cache:
-            candidate_a, center_irc = getCtRawCandidate(
-                candidateInfo_tup.series_uid,
-                candidateInfo_tup.center_xyz,
-                width_irc,
-            )
-            candidate_t = torch.from_numpy(candidate_a).to(torch.float32)
-            candidate_t = candidate_t.unsqueeze(0)
-        else:
-            ct = getCt(candidateInfo_tup.series_uid)
-            candidate_a, center_irc = ct.getRawCandidate(
-                candidateInfo_tup.center_xyz,
-                width_irc,
-            )
-            candidate_t = torch.from_numpy(candidate_a).to(torch.float32)
-            candidate_t = candidate_t.unsqueeze(0)
-
-
-       # candidate_a, center_irc = getCtRawCandidate(
-        #    candidateInfo_tup.series_uid,
-         #   candidateInfo_tup.center_xyz,
-          #  width_irc,
-       # )
+    def __getitem__(self, ndx): #<4>
+        series_uid, slice_ndx = self.sample_list[ndx % len(self.sample_list)]
+        return self.getitem_fullSlice(series_uid, slice_ndx)
         
-        #candidate_t = torch.from_numpy(candidate_a).to(torch.float32)
-        #candidate_t = candidate_t.unsqueeze(0)
+    def getitem_fullSlice(self, series_uid, slice_ndx):
+        ct = getCt(series_uid)
+        ct_t = torch.zeros((self.contextSlices_count * 2 + 1, 512, 512))
 
-        pos_t = torch.tensor([
-                not candidateInfo_tup.isNodule_bool,
-                candidateInfo_tup.isNodule_bool
-            ],
-            dtype=torch.long,
+        start_ndx = slice_ndx - self.contextSlices_count
+        end_ndx = slice_ndx + self.contextSlices_count + 1
+        for i, context_ndx in enumerate(range(start_ndx, end_ndx)):
+            context_ndx = max(context_ndx, 0)
+            context_ndx = min(context_ndx, ct.hu_a.shape[0] - 1)
+            ct_t[i] = torch.from_numpy(ct.hu_a[context_ndx].astype(np.float32))
+
+            # CTs are natively expressed in https://en.wikipedia.org/wiki/Hounsfield_scale
+            # HU are scaled oddly, with 0 g/cc (air, approximately) being -1000 and 1 g/cc (water) being 0.
+            # The lower bound gets rid of negative density stuff used to indicate out-of-FOV
+            # The upper bound nukes any weird hotspots and clamps bone down
+        ct_t.clamp_(-1000, 1000)
+        pos_t = torch.from_numpy(ct.positive_mask[slice_ndx]).unsqueeze(0)
+        print(pos_t)
+        return ct_t, pos_t, ct.series_uid, slice_ndx
+
+
+
+
+canInfo_list = copy.copy(getCandidateInfoList())
+#pos_list = [ nt for nt in canInfo_list if not nt.isNodule_bool #<3>
+        
+
+#series_uid = '1.3.6.1.4.1.14519.5.2.1.6279.6001.109002525524522225658609808059'
+#ct_sample = getCt(series_uid)
+#train_ds = TrainingLuna2dSegmentationDataset(
+#            val_stride=10,
+#            isValSet_bool=False,
+#            contextSlices_count=3,
+ #       )
+val_ds = Luna2dSegmentationDataset(
+            val_stride=10,
+            isValSet_bool=True,
+            contextSlices_count=3,
         )
+print(val_ds[0])
 
-        return candidate_t, pos_t, candidateInfo_tup.series_uid, torch.tensor(center_irc)
+#test = ct_sample.buildAnnotationMask(pos_list)
+#print(test)
+
+
