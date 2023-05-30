@@ -4,6 +4,8 @@ print ("Always executed")
 import torch
 from torch.utils.data import Dataset, DataLoader
 import argparse
+import pandas as pd 
+import numpy as np
 
 class MyDataset:
     def __init__(self):
@@ -49,8 +51,14 @@ for epoch in range(num_epochs):
 
  
 
-
-
+#df = pd.read_csv('../LUNA/candidates.csv')
+df = pd.read_csv('../LUNA/annotations_with_malignancy.csv')
+#suids_unique = np.unique(df['seriesuid'])
+#for suid in suids_unique:
+ #   test = df[df.seriesuid == suid ]
+  #  unque = np.unique(test['class'])
+   # if len(unque) > 1:
+    #    print(unque)
 
 
 

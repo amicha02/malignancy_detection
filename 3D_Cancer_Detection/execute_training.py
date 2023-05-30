@@ -28,7 +28,10 @@ def cleanCache():
 
 
 if __name__ == "__main__":
-    #cleanCache()
+    cleanCache()
     run('prepcache.LunaPrepCacheApp')
-    run('training.LunaTrainingApp', '--epochs=5')
+   # run('training.LunaTrainingApp', '--epochs=1')
+
+    #run('training.LunaTrainingApp', '--epochs=1','--augment-flip')
+
 
