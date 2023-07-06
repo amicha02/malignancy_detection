@@ -1,32 +1,13 @@
 import math
-import random
-from collections import namedtuple
 
-import torch
 from torch import nn as nn
-import torch.nn.functional as F
 
 from util.logconf import logging
-from util.unet import UNet
 
 log = logging.getLogger(__name__)
 # log.setLevel(logging.WARN)
 # log.setLevel(logging.INFO)
 log.setLevel(logging.DEBUG)
-
-
-class SegmentationAugmentation(nn.Module):
-    def __init__(
-            self, flip=None, offset=None, scale=None, rotate=None, noise=None
-    ):
-        super().__init__()
-
-        self.flip = flip
-        self.offset = offset
-    
-    def forward(self, input_g, label_g):
-        return True,True
-
 
 
 class LunaModel(nn.Module):
@@ -105,4 +86,3 @@ class LunaBlock(nn.Module):
         block_out = self.relu2(block_out)
 
         return self.maxpool(block_out)
-    

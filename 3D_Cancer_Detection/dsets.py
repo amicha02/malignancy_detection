@@ -19,14 +19,18 @@ from util.disk import getCache
 from util.util import XyzTuple, xyz2irc
 from util.logconf import logging
 
+#delete later
+from model import SegmentationAugmentation
+from torch.utils.data import DataLoader
+from util.util import enumerateWithEstimate
+
+
 raw_cache = getCache('part2ch11_raw')
 
 log = logging.getLogger(__name__)
 # log.setLevel(logging.WARN)
 # log.setLevel(logging.INFO)
 log.setLevel(logging.DEBUG)
-
-raw_cache = getCache('part2ch13_raw')
 
 MaskTuple = namedtuple('MaskTuple', 'raw_dense_mask, dense_mask, body_mask, air_mask, raw_candidate_mask, candidate_mask, lung_mask, neg_mask, pos_mask')
 CandidateInfoTuple = namedtuple('CandidateInfoTuple', 'isNodule_bool, hasAnnotation_bool, isMal_bool, diameter_mm, series_uid, center_xyz')
@@ -311,13 +315,49 @@ class Luna2dSegmentationDataset(Dataset):
             # The upper bound nukes any weird hotspots and clamps bone down
         ct_t.clamp_(-1000, 1000)
         pos_t = torch.from_numpy(ct.positive_mask[slice_ndx]).unsqueeze(0)
-        print(pos_t)
         return ct_t, pos_t, ct.series_uid, slice_ndx
 
 
+class TrainingLuna2dSegmentationDataset(Luna2dSegmentationDataset):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.ratio_int = 2
+            
+    def __len__(self):
+        return 300000
+
+    def shuffleSamples(self):
+        random.shuffle(self.candidateInfo_list)
+        random.shuffle(self.pos_list)
+
+    def __getitem__(self, ndx):
+        candidateInfo_tup = self.pos_list[ndx % len(self.pos_list)]
+        return self.getitem_trainingCrop(candidateInfo_tup)
+        
+    def getitem_trainingCrop(self, candidateInfo_tup):
+        ct_a, pos_a, center_irc = getCtRawCandidate( #<1>
+        candidateInfo_tup.series_uid,
+        candidateInfo_tup.center_xyz,
+            (7, 96, 96),
+        )
+        pos_a = pos_a[3:4]
+
+        row_offset = random.randrange(0,32)
+        col_offset = random.randrange(0,32)
+        ct_t = torch.from_numpy(ct_a[:, row_offset:row_offset+64,
+                                     col_offset:col_offset+64]).to(torch.float32)
+        pos_t = torch.from_numpy(pos_a[:, row_offset:row_offset+64,
+                                       col_offset:col_offset+64]).to(torch.long)
+        slice_ndx = center_irc.index
+        print(slice_ndx)
+        return ct_t, pos_t, candidateInfo_tup.series_uid, slice_ndx
+
+    
 
 
-canInfo_list = copy.copy(getCandidateInfoList())
+
+
+#canInfo_list = copy.copy(getCandidateInfoList())
 #pos_list = [ nt for nt in canInfo_list if not nt.isNodule_bool #<3>
         
 
@@ -328,12 +368,40 @@ canInfo_list = copy.copy(getCandidateInfoList())
 #            isValSet_bool=False,
 #            contextSlices_count=3,
  #       )
-val_ds = Luna2dSegmentationDataset(
+#val_ds = Luna2dSegmentationDataset(
+#            val_stride=10,
+#            isValSet_bool=True,
+#            contextSlices_count=3,
+#        )
+
+train_ds = TrainingLuna2dSegmentationDataset(
             val_stride=10,
-            isValSet_bool=True,
+            isValSet_bool=False,
             contextSlices_count=3,
         )
-print(val_ds[0])
+
+train_dl = DataLoader(
+            train_ds,
+            batch_size=16,
+            num_workers=8,
+            pin_memory= False,
+        )
+batch_iter = enumerateWithEstimate(
+            train_dl,
+            "E{} Training".format(0),
+            start_ndx=train_dl.num_workers,
+        )
+augmentation_model = SegmentationAugmentation()
+x = 0 
+for batch_ndx, batch_tup in batch_iter:
+    input_t, label_t, series_list, _slice_ndx_list = batch_tup
+    input_g, label_g = augmentation_model(input_t, label_t)
+    break
+
+
+
+
+
 
 #test = ct_sample.buildAnnotationMask(pos_list)
 #print(test)

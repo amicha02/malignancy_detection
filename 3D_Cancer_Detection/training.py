@@ -3,7 +3,7 @@ import datetime
 import os
 import sys
 
-import numpy as np
+import numpy as npc
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -12,9 +12,11 @@ import torch.nn as nn
 from torch.optim import SGD, Adam
 from torch.utils.data import DataLoader
 from util.util import enumerateWithEstimate
-from dsets import LunaDataset
+from dsets import Luna2dSegmentationDataset, TrainingLuna2dSegmentationDataset, getCt
 from util.logconf import logging
-from model import LunaModel
+from model import SegmentationAugmentation
+
+
 
 log = logging.getLogger(__name__)
 #log.setLevel(logging.WARN)
@@ -144,7 +146,7 @@ class LunaTrainingApp:
             augmentation_dict=self.augmentation_dict,
 
         )
-        print(train_ds)
+        #print(train_ds)
         batch_size = self.cli_args.batch_size
      #   if self.use_cuda:
      #       batch_size *= torch.cuda.device_count()
