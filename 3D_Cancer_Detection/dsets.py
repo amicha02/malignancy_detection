@@ -349,7 +349,7 @@ class TrainingLuna2dSegmentationDataset(Luna2dSegmentationDataset):
         pos_t = torch.from_numpy(pos_a[:, row_offset:row_offset+64,
                                        col_offset:col_offset+64]).to(torch.long)
         slice_ndx = center_irc.index
-        print(slice_ndx)
+      #  print(slice_ndx)
         return ct_t, pos_t, candidateInfo_tup.series_uid, slice_ndx
 
     
@@ -391,12 +391,16 @@ batch_iter = enumerateWithEstimate(
             "E{} Training".format(0),
             start_ndx=train_dl.num_workers,
         )
+
+train_ds_size = len(train_ds)
+number_of_batches = len(train_dl)
+
 augmentation_model = SegmentationAugmentation()
-x = 0 
 for batch_ndx, batch_tup in batch_iter:
     input_t, label_t, series_list, _slice_ndx_list = batch_tup
     input_g, label_g = augmentation_model(input_t, label_t)
     break
+
 
 
 

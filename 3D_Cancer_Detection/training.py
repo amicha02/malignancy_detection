@@ -14,13 +14,13 @@ from torch.utils.data import DataLoader
 from util.util import enumerateWithEstimate
 from dsets import Luna2dSegmentationDataset, TrainingLuna2dSegmentationDataset, getCt
 from util.logconf import logging
-from model import SegmentationAugmentation
+from model import SegmentationAugmentation, UNetWrapper
 
 
 
 log = logging.getLogger(__name__)
 #log.setLevel(logging.WARN)
-log.setLevel(logging.INFO)
+#log.setLevel(logging.INFO)
 log.setLevel(logging.DEBUG)
 
 # Used for computeBatchLoss and logMetrics to index into metrics_t/metrics_a
@@ -34,6 +34,7 @@ class LunaTrainingApp:
     def __init__(self, sys_argv=None):
         if sys_argv is None:
             sys_argv = sys.argv[1:]
+
         parser = argparse.ArgumentParser()
         parser.add_argument('--num-workers',
             help='Number of worker processes for background data loading',
@@ -47,7 +48,7 @@ class LunaTrainingApp:
         )
         parser.add_argument('--epochs',
             help='Number of epochs to train for',
-            default=5,
+            default=1,
             type=int,
         )
         parser.add_argument('--balanced',
@@ -56,7 +57,7 @@ class LunaTrainingApp:
             default=False,
         )
         parser.add_argument('--tb-prefix',
-            default='p2ch11',
+            default='p2ch13',
             help="Data prefix to use for Tensorboard run. Defaults to chapter.",
         )
         parser.add_argument('--augmented',
@@ -96,8 +97,6 @@ class LunaTrainingApp:
         )
         self.cli_args = parser.parse_args(sys_argv)
         self.time_str = datetime.datetime.now().strftime('%Y-%m-%d_%H.%M.%S')
-    
-    
         self.trn_writer = None
         self.val_writer = None
         self.totalTrainingSamples_count = 0
@@ -109,7 +108,7 @@ class LunaTrainingApp:
         if self.cli_args.augmented or self.cli_args.augment_flip:
             self.augmentation_dict['flip'] = True
         if self.cli_args.augmented or self.cli_args.augment_offset:
-            self.augmentation_dict['offset'] = 0.1
+            self.augmentation_dict['offset'] = 0.03
         if self.cli_args.augmented or self.cli_args.augment_scale:
             self.augmentation_dict['scale'] = 0.2
         if self.cli_args.augmented or self.cli_args.augment_rotate:
@@ -122,12 +121,22 @@ class LunaTrainingApp:
         self.device = torch.device("cpu")
        # self.device = torch.device("mps" if self.use_mps1 and self.use_mps2 else "cpu")
 
-        self.model = self.initModel()
+        #self.model = self.initModel()
+        self.segmentation_model, self.augmentation_model
         self.optimizer = self.initOptimizer()
         
 
     def initModel(self):
-        model = LunaModel()
+        #model = LunaModel()
+        segmentation_model = UNetWrapper(
+            in_channels=7,
+            n_classes=1,
+            depth=3,
+            wf=4,
+            padding=True,
+            batch_norm=True,
+            up_mode='upconv',
+        )
         if self.use_mps1 and self.use_mps2:
             log.info("Using Apple's M1 chip as a GPU device.")
             #    model = nn.DataParallel(model)
