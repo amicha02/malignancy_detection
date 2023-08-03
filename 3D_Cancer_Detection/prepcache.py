@@ -10,8 +10,9 @@ from torch.utils.data import DataLoader
 
 from util.util import enumerateWithEstimate
 #from dsets import LunaDataset
+from dsets import PrepcacheLunaDataset , getCtSampleSize
 from util.logconf import logging
-from model import LunaModel
+#from model import LunaModel
 
 log = logging.getLogger(__name__)
 # log.setLevel(logging.WARN)
@@ -42,13 +43,21 @@ class LunaPrepCacheApp:
     def main(self):
         log.info("Starting {}, {}".format(type(self).__name__, self.cli_args))
 
-        self.prep_dl = DataLoader(
+        """self.prep_dl = DataLoader(
             LunaDataset(
                 sortby_str='series_uid',
             ),
             batch_size=self.cli_args.batch_size,
             num_workers=self.cli_args.num_workers,
+        )"""
+        self.prep_dl = DataLoader(
+            PrepcacheLunaDataset(
+                # sortby_str='series_uid',
+            ),
+            batch_size=self.cli_args.batch_size,
+            num_workers=self.cli_args.num_workers,
         )
+
 
         batch_iter = enumerateWithEstimate(
             self.prep_dl,
@@ -56,7 +65,10 @@ class LunaPrepCacheApp:
             start_ndx=self.prep_dl.num_workers,
         )
         for _ in batch_iter:
-            pass
+            print(_)
+         #   pass
+        print(batch_iter)
+
 
 
 if __name__ == '__main__':

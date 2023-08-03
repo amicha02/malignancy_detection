@@ -104,8 +104,8 @@ def getCandidateInfoDict(requireOnDisk_bool=True):
 class Ct:
     def __init__(self, series_uid):
         mhd_path = glob.glob(
-            '../LUNA/subset*/{}.mhd'.format(series_uid)
-        )[0]
+                '../LUNA_short/subset*/{}.mhd'.format(series_uid)
+            )[0]
         ct_mhd = sitk.ReadImage(mhd_path)
         ct_a = np.array(sitk.GetArrayFromImage(ct_mhd), dtype=np.float32)
 
@@ -268,7 +268,13 @@ class Luna2dSegmentationDataset(Dataset):
 
         self.sample_list = [] #<2>
         for series_uid in self.series_list:
-            index_count, positive_indexes = getCtSampleSize(series_uid)
+            ####################
+            try:
+                index_count, positive_indexes = getCtSampleSize(series_uid)
+            except:
+                continue
+            ####################
+           # index_count, positive_indexes = getCtSampleSize(series_uid)
             if self.fullCt_bool:
                 self.sample_list += [(series_uid, slice_ndx)
                                      for slice_ndx in range(index_count)]
@@ -318,6 +324,44 @@ class Luna2dSegmentationDataset(Dataset):
         return ct_t, pos_t, ct.series_uid, slice_ndx
 
 
+class PrepcacheLunaDataset(Dataset):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.candidateInfo_list = getCandidateInfoList()
+        self.pos_list = [nt for nt in self.candidateInfo_list if nt.isNodule_bool]
+
+        self.seen_set = set()
+        self.candidateInfo_list.sort(key=lambda x: x.series_uid)
+        
+        ####CACHE LESS DATA######
+        mhd_list = glob.glob('../LUNA_short/subset*/*.mhd')
+        series_uid_short = [x.split('/')[-1][:-4] for x in mhd_list]
+        self.candidateInfo_list = [candidate for candidate in self.candidateInfo_list if candidate[4] in series_uid_short]
+        ###############
+    def __len__(self):
+        return len(self.candidateInfo_list)
+
+    def __getitem__(self, ndx):
+        # candidate_t, pos_t, series_uid, center_t = super().__getitem__(ndx)
+
+        candidateInfo_tup = self.candidateInfo_list[ndx]
+        getCtRawCandidate(candidateInfo_tup.series_uid, candidateInfo_tup.center_xyz, (7, 96, 96))
+
+        series_uid = candidateInfo_tup.series_uid
+        if series_uid not in self.seen_set:
+            self.seen_set.add(series_uid)
+
+            getCtSampleSize(series_uid)
+            # ct = getCt(series_uid)
+            # for mask_ndx in ct.positive_indexes:
+            #     build2dLungMask(series_uid, mask_ndx)
+
+        return 0, 1 #candidate_t, pos_t, series_uid, center_t
+
+
+
+
 class TrainingLuna2dSegmentationDataset(Luna2dSegmentationDataset):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -332,6 +376,7 @@ class TrainingLuna2dSegmentationDataset(Luna2dSegmentationDataset):
 
     def __getitem__(self, ndx):
         candidateInfo_tup = self.pos_list[ndx % len(self.pos_list)]
+       # print(candidateInfo_tup)
         return self.getitem_trainingCrop(candidateInfo_tup)
         
     def getitem_trainingCrop(self, candidateInfo_tup):
@@ -374,6 +419,10 @@ class TrainingLuna2dSegmentationDataset(Luna2dSegmentationDataset):
 #            contextSlices_count=3,
 #        )
 
+
+ 
+
+""""
 train_ds = TrainingLuna2dSegmentationDataset(
             val_stride=10,
             isValSet_bool=False,
@@ -411,3 +460,4 @@ for batch_ndx, batch_tup in batch_iter:
 #print(test)
 
 
+"""

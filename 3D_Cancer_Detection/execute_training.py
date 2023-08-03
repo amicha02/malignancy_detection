@@ -32,7 +32,7 @@ if __name__ == "__main__":
     run('prepcache.LunaPrepCacheApp')
    # run('training.LunaTrainingApp', '--epochs=1')
 
-    #run('training.LunaTrainingApp', '--epochs=1','--augment-flip')
-    run('training.LunaTrainingApp', '--epochs=1','--augment-flip')
+    #run('training.LunaTrainingApp', '--epochs=1','--augment-flip')=
+   # run('training.LunaTrainingApp', '--epochs=1','--augment-flip')
 
 
