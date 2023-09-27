@@ -20,9 +20,9 @@ class UNetWrapper(nn.Module): #<1>
         super().__init__()
         self.input_batchnorm = nn.BatchNorm2d(kwargs['in_channels']) #<3>
         self.unet = UNet(**kwargs) 
-        self.final = nn.Sigmoid()
+        self.final = nn.Sigmoid() #<4>
 
-        self._init_weights() #<4>
+        self._init_weights() #<5>
 
     def _init_weights(self):
         init_set = {
@@ -31,7 +31,7 @@ class UNetWrapper(nn.Module): #<1>
             nn.ConvTranspose2d,
             nn.ConvTranspose3d,
             nn.Linear,
-        } #<1>
+        } #<5>
         for m in self.modules():
             if type(m) in init_set:
                 nn.init.kaiming_normal_(
@@ -42,6 +42,7 @@ class UNetWrapper(nn.Module): #<1>
                         nn.init._calculate_fan_in_and_fan_out(m.weight.data)
                     bound = 1 / math.sqrt(fan_out)
                     nn.init.normal_(m.bias, -bound, bound)
+      #      print(m)
     def forward(self, input_batch):
             bn_output = self.input_batchnorm(input_batch)
             un_output = self.unet(bn_output)
@@ -76,6 +77,7 @@ class SegmentationAugmentation(nn.Module):
         augmented_label_g = F.grid_sample(label_g.to(torch.float32),
                 affine_t, padding_mode='border',
                 align_corners=False)
+        print(augmented_input_g)
         return augmented_input_g, augmented_label_g > 0.5
     
 

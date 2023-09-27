@@ -20,12 +20,12 @@ from util.util import XyzTuple, xyz2irc
 from util.logconf import logging
 
 #delete later
-from model import SegmentationAugmentation
-from torch.utils.data import DataLoader
-from util.util import enumerateWithEstimate
+#from model import SegmentationAugmentation
+#from torch.utils.data import DataLoader
+#from util.util import enumerateWithEstimate
 
 
-raw_cache = getCache('part2ch11_raw')
+raw_cache = getCache('part2ch13_raw')
 
 log = logging.getLogger(__name__)
 # log.setLevel(logging.WARN)
@@ -33,18 +33,18 @@ log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
 
 MaskTuple = namedtuple('MaskTuple', 'raw_dense_mask, dense_mask, body_mask, air_mask, raw_candidate_mask, candidate_mask, lung_mask, neg_mask, pos_mask')
+
 CandidateInfoTuple = namedtuple('CandidateInfoTuple', 'isNodule_bool, hasAnnotation_bool, isMal_bool, diameter_mm, series_uid, center_xyz')
 
-@functools.lru_cache(1)
+@functools.lru_cache(1)#<3>
 def getCandidateInfoList(requireOnDisk_bool=True):
     # We construct a set with all series_uids that are present on disk.
     # This will let us use the data, even if we haven't downloaded all of
     # the subsets yet.
-    mhd_list = glob.glob('../LUNA/subset*/*.mhd')
+    mhd_list = glob.glob('../LUNA_short/subset*/*.mhd')
     presentOnDisk_set = {os.path.split(p)[-1][:-4] for p in mhd_list}
     
     candidateInfo_list = []
-    mal_bool_values = []
     with open('../LUNA/annotations_with_malignancy.csv', "r") as f:
         for row in list(csv.reader(f))[1:]:
             series_uid = row[0]
@@ -62,7 +62,6 @@ def getCandidateInfoList(requireOnDisk_bool=True):
                     annotationCenter_xyz,
                 )
             )
-    #print(candidateInfo_list)
     with open('../LUNA/candidates.csv', "r") as f:
         for row in list(csv.reader(f))[1:]:
             series_uid = row[0]
@@ -78,7 +77,7 @@ def getCandidateInfoList(requireOnDisk_bool=True):
                     False, #isNodule_bool
                     False, #hasAnnotation_bool
                     False, #isMal_bool
-                    0.0,
+                    0.0, #candidateDiameter
                     series_uid,
                     candidateCenter_xyz,
                     )
@@ -103,20 +102,21 @@ def getCandidateInfoDict(requireOnDisk_bool=True):
 
 class Ct:
     def __init__(self, series_uid):
+        #series_uid = '1.3.6.1.4.1.14519.5.2.1.6279.6001.109002525524522225658609808059'
+        print(series_uid)
         mhd_path = glob.glob(
                 '../LUNA_short/subset*/{}.mhd'.format(series_uid)
             )[0]
         ct_mhd = sitk.ReadImage(mhd_path)
-        ct_a = np.array(sitk.GetArrayFromImage(ct_mhd), dtype=np.float32)
+        self.hu_a = np.array(sitk.GetArrayFromImage(ct_mhd), dtype=np.float32)
 
         # CTs are natively expressed in https://en.wikipedia.org/wiki/Hounsfield_scale
         # HU are scaled oddly, with 0 g/cc (air, approximately) being -1000 and 1 g/cc (water) being 0.
         # The lower bound gets rid of negative density stuff used to indicate out-of-FOV
         # The upper bound nukes any weird hotspots and clamps bone down
-        ct_a.clip(-1000, 1000, ct_a)
+        #ct_a.clip(-1000, 1000, ct_a)
 
         self.series_uid = series_uid
-        self.hu_a = ct_a
 
         self.origin_xyz = XyzTuple(*ct_mhd.GetOrigin())
         self.vxSize_xyz = XyzTuple(*ct_mhd.GetSpacing())
@@ -135,10 +135,6 @@ class Ct:
                                  .nonzero()[0].tolist())
                             
         #<to6>
-
-    def dummy(self):
-        x = 0
-        return x
     
 
     def buildAnnotationMask(self, positiveInfo_list, threshold_hu = -700):
@@ -229,7 +225,7 @@ class Ct:
 def getCt(series_uid):
     return Ct(series_uid)
 
-@raw_cache.memoize(typed=True)
+@raw_cache.memoize(typed=True) 
 def getCtRawCandidate(series_uid, center_xyz, width_irc):
     ct = getCt(series_uid)
     ct_chunk, pos_chunk, center_irc = ct.getRawCandidate(center_xyz, width_irc)
@@ -253,11 +249,18 @@ class Luna2dSegmentationDataset(Dataset):
         self.contextSlices_count = contextSlices_count
         self.fullCt_bool = fullCt_bool
 
+ 
+        series_set_short = [x.split('/subset0/')[1][:-4] for x in glob.glob('../LUNA_short/subset*/*.mhd')]
+
+
         if series_uid:
             self.series_list = [series_uid]
         else:
             self.series_list = sorted(getCandidateInfoDict().keys())
 
+        self.series_list = [x for x in self.series_list if x in series_set_short]
+        test1 = self.series_list.copy()
+        print(test1)
         if isValSet_bool: #<1>
             assert val_stride > 0, val_stride
             self.series_list = self.series_list[::val_stride]
@@ -267,14 +270,10 @@ class Luna2dSegmentationDataset(Dataset):
             assert self.series_list
 
         self.sample_list = [] #<2>
+        #print(self.series_list)
         for series_uid in self.series_list:
-            ####################
-            try:
-                index_count, positive_indexes = getCtSampleSize(series_uid)
-            except:
-                continue
-            ####################
-           # index_count, positive_indexes = getCtSampleSize(series_uid)
+   
+            index_count, positive_indexes = getCtSampleSize(series_uid)     
             if self.fullCt_bool:
                 self.sample_list += [(series_uid, slice_ndx)
                                      for slice_ndx in range(index_count)]
@@ -296,6 +295,8 @@ class Luna2dSegmentationDataset(Dataset):
             len(self.sample_list),
             len(self.pos_list),
         ))
+       # print(self.series_list)
+
 
     def __len__(self):
         return len(self.sample_list)
@@ -326,19 +327,23 @@ class Luna2dSegmentationDataset(Dataset):
 
 class PrepcacheLunaDataset(Dataset):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs) #<1>
 
-        self.candidateInfo_list = getCandidateInfoList()
+        self.candidateInfo_list = getCandidateInfoList() #<2>
         self.pos_list = [nt for nt in self.candidateInfo_list if nt.isNodule_bool]
 
         self.seen_set = set()
         self.candidateInfo_list.sort(key=lambda x: x.series_uid)
-        
+       
+
         ####CACHE LESS DATA######
         mhd_list = glob.glob('../LUNA_short/subset*/*.mhd')
         series_uid_short = [x.split('/')[-1][:-4] for x in mhd_list]
         self.candidateInfo_list = [candidate for candidate in self.candidateInfo_list if candidate[4] in series_uid_short]
+        sample_filter = [candidate for candidate in self.candidateInfo_list if candidate[4] ==  '1.3.6.1.4.1.14519.5.2.1.6279.6001.109002525524522225658609808059']
+        #print(self.candidateInfo_list)
         ###############
+
     def __len__(self):
         return len(self.candidateInfo_list)
 
@@ -346,8 +351,7 @@ class PrepcacheLunaDataset(Dataset):
         # candidate_t, pos_t, series_uid, center_t = super().__getitem__(ndx)
 
         candidateInfo_tup = self.candidateInfo_list[ndx]
-        getCtRawCandidate(candidateInfo_tup.series_uid, candidateInfo_tup.center_xyz, (7, 96, 96))
-
+        getCtRawCandidate(candidateInfo_tup.series_uid, candidateInfo_tup.center_xyz, (7, 96, 96)) #<3>
         series_uid = candidateInfo_tup.series_uid
         if series_uid not in self.seen_set:
             self.seen_set.add(series_uid)
@@ -356,7 +360,6 @@ class PrepcacheLunaDataset(Dataset):
             # ct = getCt(series_uid)
             # for mask_ndx in ct.positive_indexes:
             #     build2dLungMask(series_uid, mask_ndx)
-
         return 0, 1 #candidate_t, pos_t, series_uid, center_t
 
 

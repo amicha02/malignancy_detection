@@ -224,7 +224,6 @@ def enumerateWithEstimate(
     for (current_ndx, item) in enumerate(iter):
         yield (current_ndx, item)
         if current_ndx == print_ndx:
-            # ... <1>
             duration_sec = ((time.time() - start_ts)
                             / (current_ndx - start_ndx + 1)
                             * (iter_len-start_ndx)
@@ -251,6 +250,10 @@ def enumerateWithEstimate(
         iter_len,
         str(datetime.datetime.now()).rsplit('.', 1)[0],
     ))
+
+
+
+
 
 #
 # try:

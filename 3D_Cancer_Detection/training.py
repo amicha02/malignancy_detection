@@ -3,7 +3,7 @@ import datetime
 import os
 import sys
 
-import numpy as npc
+import numpy as np
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -25,12 +25,26 @@ log.setLevel(logging.DEBUG)
 
 # Used for computeBatchLoss and logMetrics to index into metrics_t/metrics_a
 
-METRICS_LABEL_NDX=0
-METRICS_PRED_NDX=1
-METRICS_LOSS_NDX=2
-METRICS_SIZE = 3
+#METRICS_LABEL_NDX=0
+#METRICS_PRED_NDX=1
+#METRICS_LOSS_NDX=2
+#METRICS_SIZE = 3
+# Used for computeClassificationLoss and logMetrics to index into metrics_t/metrics_a
+# METRICS_LABEL_NDX = 0
+METRICS_LOSS_NDX = 1
+# METRICS_FN_LOSS_NDX = 2
+# METRICS_ALL_LOSS_NDX = 3
 
-class LunaTrainingApp:
+# METRICS_PTP_NDX = 4
+# METRICS_PFN_NDX = 5
+# METRICS_MFP_NDX = 6
+METRICS_TP_NDX = 7
+METRICS_FN_NDX = 8
+METRICS_FP_NDX = 9
+
+METRICS_SIZE = 10
+
+class SegmentationTrainingApp:
     def __init__(self, sys_argv=None):
         if sys_argv is None:
             sys_argv = sys.argv[1:]
@@ -101,9 +115,6 @@ class LunaTrainingApp:
         self.val_writer = None
         self.totalTrainingSamples_count = 0
 
-      #  self.use_cuda = torch.cuda.is_available()
-       # self.device = torch.device("cuda" if self.use_cuda else "cpu")
-        
         self.augmentation_dict = {}
         if self.cli_args.augmented or self.cli_args.augment_flip:
             self.augmentation_dict['flip'] = True
@@ -116,18 +127,24 @@ class LunaTrainingApp:
         if self.cli_args.augmented or self.cli_args.augment_noise:
             self.augmentation_dict['noise'] = 25.0
 
-        self.use_mps1 = torch.backends.mps.is_available()
-        self.use_mps2 = torch.backends.mps.is_built()
-        self.device = torch.device("cpu")
+       # self.use_mps1 = torch.backends.mps.is_available()
+        
+        #self.use_mps2 = torch.backends.mps.is_built()
+        #self.device = torch.device("cpu")
        # self.device = torch.device("mps" if self.use_mps1 and self.use_mps2 else "cpu")
 
         #self.model = self.initModel()
-        self.segmentation_model, self.augmentation_model
-        self.optimizer = self.initOptimizer()
+
+        self.use_cuda = torch.cuda.is_available()
+        self.device = torch.device("cuda" if self.use_cuda else "cpu")
+        
+        self.segmentation_model, self.augmentation_model = self.initModel() #<1>
+       # print(self.segmentation_model)
+        self.optimizer = self.initOptimizer() #<3>
         
 
+
     def initModel(self):
-        #model = LunaModel()
         segmentation_model = UNetWrapper(
             in_channels=7,
             n_classes=1,
@@ -137,42 +154,59 @@ class LunaTrainingApp:
             batch_norm=True,
             up_mode='upconv',
         )
-        if self.use_mps1 and self.use_mps2:
-            log.info("Using Apple's M1 chip as a GPU device.")
-            #    model = nn.DataParallel(model)
-            model = model.to(self.device)
-           # print('Successfully transfered model to device')
-        return model
+         #<2>) 
+
+
+
+
+        augmentation_model = SegmentationAugmentation(**self.augmentation_dict)
+
+        if self.use_cuda:
+            log.info("Using CUDA; {} devices.".format(torch.cuda.device_count()))
+            if torch.cuda.device_count() > 1:
+                segmentation_model = nn.DataParallel(segmentation_model)
+                augmentation_model = nn.DataParallel(augmentation_model)
+            segmentation_model = segmentation_model.to(self.device)
+            augmentation_model = augmentation_model.to(self.device)
+
+        return segmentation_model, augmentation_model
+
 
     def initOptimizer(self):
-        return SGD(self.model.parameters(), lr=0.001, momentum=0.99)
+        return Adam(self.segmentation_model.parameters())
+        # return SGD(self.segmentation_model.parameters(), lr=0.001, momentum=0.99)
+
+
 
     def initTrainDl(self):
-        train_ds = LunaDataset(
+        train_ds = TrainingLuna2dSegmentationDataset(
             val_stride=10,
             isValSet_bool=False,
-            ratio_int= int(self.cli_args.balanced),
-            augmentation_dict=self.augmentation_dict,
+    #        ratio_int= int(self.cli_args.balanced),
+           # augmentation_dict=self.augmentation_dict,
+            contextSlices_count=3,
 
         )
         #print(train_ds)
         batch_size = self.cli_args.batch_size
-     #   if self.use_cuda:
-     #       batch_size *= torch.cuda.device_count()
+        if self.use_cuda:
+            batch_size *= torch.cuda.device_count()
         #print(batch_size)
         train_dl = DataLoader(
             train_ds,
             batch_size=batch_size,
             num_workers=self.cli_args.num_workers,
-            pin_memory=(self.use_mps1 and self.use_mps2) ,
+            pin_memory= self.use_cuda,
+           # pin_memory=(self.use_mps1 and self.use_mps2) ,
         )
 
         return train_dl
 
     def initValDl(self):
-        val_ds = LunaDataset(
+        val_ds = TrainingLuna2dSegmentationDataset(
             val_stride=10,
             isValSet_bool=True,
+            contextSlices_count=3 ,
         )
 
         batch_size = self.cli_args.batch_size
@@ -183,7 +217,8 @@ class LunaTrainingApp:
             val_ds,
             batch_size=batch_size,
             num_workers=self.cli_args.num_workers,
-            pin_memory= (self.use_mps1 and self.use_mps2),
+            pin_memory=self.use_cuda,
+            #pin_memory= (self.use_mps1 and self.use_mps2),
         )
 
         return val_dl
@@ -204,6 +239,9 @@ class LunaTrainingApp:
         train_dl = self.initTrainDl()
        #print(train_dl)
         val_dl = self.initValDl()
+        best_score = 0.0
+        self.validation_cadence = 5
+
         
         for epoch_ndx in range(1, self.cli_args.epochs + 1):
 
@@ -222,27 +260,29 @@ class LunaTrainingApp:
             valMetrics_t = self.doValidation(epoch_ndx, val_dl)
             self.logMetrics(epoch_ndx, 'val', valMetrics_t)
 
-        if hasattr(self, 'trn_writer'):
-            self.trn_writer.close()
-            self.val_writer.close()
+       # if hasattr(self, 'trn_writer'):
+        self.trn_writer.close()
+        self.val_writer.close()
 
 
     def doTraining(self, epoch_ndx, train_dl):
-        self.model.train()
+
         trnMetrics_g = torch.zeros(
             METRICS_SIZE,
             len(train_dl.dataset),
             device=self.device,
         )
-
+        self.segmentation_model.train()
+        #print(train_dl)
+        #train_dl.dataset.shuffleSamples()
         batch_iter = enumerateWithEstimate(
             train_dl,
             "E{} Training".format(epoch_ndx),
             start_ndx=train_dl.num_workers,
         )
-        #print("Started batch iteration")
-
+       #print(batch_iter)
         for batch_ndx, batch_tup in batch_iter:
+            #print(batch_tup)
     
             self.optimizer.zero_grad()
 
@@ -251,7 +291,8 @@ class LunaTrainingApp:
                 batch_tup,
                 train_dl.batch_size,
                 trnMetrics_g
-            )
+            ) #<4>
+            #print(loss_var)
            # print("After calling computeBatchLoss")
             loss_var.backward()
             self.optimizer.step()
@@ -263,7 +304,8 @@ class LunaTrainingApp:
             #         self.trn_writer.add_graph(model, batch_tup[0], verbose=True)
             #         self.trn_writer.close()
             #print("Finished batch iteration")
-        self.totalTrainingSamples_count += len(train_dl.dataset)
+        self.totalTrainingSamples_count += trnMetrics_g.size(1)
+        print(self.totalTrainingSamples_count)
 
         return trnMetrics_g.to('cpu')
 
@@ -289,35 +331,34 @@ class LunaTrainingApp:
         return valMetrics_g.to('cpu')
     
 
-
-
-    def computeBatchLoss(self, batch_ndx, batch_tup, batch_size, metrics_g):
-        input_t, label_t, _series_list, _center_list = batch_tup
-
-        input_g = input_t.to(self.device, non_blocking=True)
-        label_g = label_t.to(self.device, non_blocking=True)
-
-        logits_g, probability_g = self.model(input_g)
-
-        loss_func = nn.CrossEntropyLoss(reduction='none')
-        loss_g = loss_func(
-            logits_g,
-            label_g[:,1],
-         )
-        start_ndx = batch_ndx * batch_size
-        end_ndx = start_ndx + label_t.size(0)
-
-        metrics_g[METRICS_LABEL_NDX, start_ndx:end_ndx] = \
-            label_g[:,1].detach()
-        metrics_g[METRICS_PRED_NDX, start_ndx:end_ndx] = \
-            probability_g[:,1].detach()
-        metrics_g[METRICS_LOSS_NDX, start_ndx:end_ndx] = \
-            loss_g.detach()
-
-        return loss_g.mean()
     
 
 
+
+    def computeBatchLoss(self, batch_ndx, batch_tup, batch_size, metrics_g,classificationThreshold=0.5):
+        input_t, label_t, _series_list, _slice_ndx_list = batch_tup
+
+        input_g = input_t.to(self.device, non_blocking=True)
+        label_g = label_t.to(self.device, non_blocking=True) 
+
+        if self.segmentation_model.training and self.augmentation_dict:
+            input_g, label_g = self.augmentation_model(input_g, label_g)
+        prediction_g = self.segmentation_model(input_g) #<5>
+        diceLoss_g = self.diceLoss(prediction_g, label_g) #<6>
+        fnLoss_g = self.diceLoss(prediction_g * label_g, label_g)
+        return diceLoss_g.mean() + fnLoss_g.mean() * 8 #<7>
+    
+
+
+    def diceLoss(self, prediction_g, label_g, epsilon=1):
+        diceLabel_g = label_g.sum(dim=[1,2,3]) 
+        dicePrediction_g = prediction_g.sum(dim=[1,2,3])
+        diceCorrect_g = (prediction_g * label_g).sum(dim=[1,2,3])
+
+        diceRatio_g = (2 * diceCorrect_g + epsilon) \
+            / (dicePrediction_g + diceLabel_g + epsilon)
+        print(diceRatio_g)
+        return 1 - diceRatio_g
 
     def logMetrics(
             self,
@@ -337,7 +378,7 @@ class LunaTrainingApp:
 
         posLabel_mask = ~negLabel_mask
         posPred_mask = ~negPred_mask
-        print(mode_str)
+        #print(mode_str)
         neg_count = int(negLabel_mask.sum())
         pos_count = int(posLabel_mask.sum())
         #print(pos_count)
@@ -475,4 +516,4 @@ class LunaTrainingApp:
     
 
 if __name__ == '__main__':
-    LunaTrainingApp().main()
+    SegmentationTrainingApp().main()

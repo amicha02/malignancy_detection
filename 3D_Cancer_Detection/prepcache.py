@@ -29,7 +29,7 @@ class LunaPrepCacheApp:
         parser = argparse.ArgumentParser()
         parser.add_argument('--batch-size',
             help='Batch size to use for training',
-            default=1024,
+            default= 2 ,
             type=int,
         )
         parser.add_argument('--num-workers',
@@ -56,7 +56,7 @@ class LunaPrepCacheApp:
             ),
             batch_size=self.cli_args.batch_size,
             num_workers=self.cli_args.num_workers,
-        )
+        ) #<1> Further analysis is the PrepcacheLunaDataset class in the dsets module
 
 
         batch_iter = enumerateWithEstimate(
@@ -64,10 +64,11 @@ class LunaPrepCacheApp:
             "Stuffing cache",
             start_ndx=self.prep_dl.num_workers,
         )
-        for _ in batch_iter:
-            print(_)
-         #   pass
-        print(batch_iter)
+
+        for _ in batch_iter: #<4>
+            #print(_)
+            pass
+           # print(batch_iter) #f9
 
 
 
