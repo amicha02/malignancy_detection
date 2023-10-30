@@ -103,7 +103,6 @@ def getCandidateInfoDict(requireOnDisk_bool=True):
 class Ct:
     def __init__(self, series_uid):
         #series_uid = '1.3.6.1.4.1.14519.5.2.1.6279.6001.109002525524522225658609808059'
-        print(series_uid)
         mhd_path = glob.glob(
                 '../LUNA_short/subset*/{}.mhd'.format(series_uid)
             )[0]
@@ -260,7 +259,7 @@ class Luna2dSegmentationDataset(Dataset):
 
         self.series_list = [x for x in self.series_list if x in series_set_short]
         test1 = self.series_list.copy()
-        print(test1)
+
         if isValSet_bool: #<1>
             assert val_stride > 0, val_stride
             self.series_list = self.series_list[::val_stride]
@@ -371,8 +370,9 @@ class TrainingLuna2dSegmentationDataset(Luna2dSegmentationDataset):
         self.ratio_int = 2
             
     def __len__(self):
-        return 300000
-
+        return len(self.candidateInfo_list)
+    
+    
     def shuffleSamples(self):
         random.shuffle(self.candidateInfo_list)
         random.shuffle(self.pos_list)

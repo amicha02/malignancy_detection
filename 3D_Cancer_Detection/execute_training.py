@@ -14,7 +14,6 @@ def run(app, *argv):
     
     app_cls = importstr(*app.rsplit('.', 1))  # <2>
     app_cls(argv).main()
-    
     log.info("Finished: {}.{!r}).main()".format(app, argv))
 
 
@@ -28,13 +27,15 @@ def cleanCache():
 
 
 if __name__ == "__main__":
+    
     #cleanCache()
     #run('prepcache.LunaPrepCacheApp')
     
     #run('training.LunaTrainingApp', '--epochs=5')
-    run('training.SegmentationTrainingApp', '--epochs=5')
+    run('training.SegmentationTrainingApp', '--epochs=20')
 
     #run('training.LunaTrainingApp', '--epochs=1','--augment-flip')=
    # run('training.LunaTrainingApp', '--epochs=1','--augment-flip')
 
 
+ 

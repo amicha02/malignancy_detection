@@ -2,6 +2,8 @@ import argparse
 import datetime
 import os
 import sys
+import shutil
+import hashlib
 
 import numpy as np
 
@@ -52,7 +54,7 @@ class SegmentationTrainingApp:
         parser = argparse.ArgumentParser()
         parser.add_argument('--num-workers',
             help='Number of worker processes for background data loading',
-            default=8,
+            default=1,
             type=int,
         )
         parser.add_argument('--batch-size',
@@ -107,7 +109,7 @@ class SegmentationTrainingApp:
         parser.add_argument('comment',
             help="Comment suffix for Tensorboard run.",
             nargs='?',
-            default='dwlpt',
+            default='none',
         )
         self.cli_args = parser.parse_args(sys_argv)
         self.time_str = datetime.datetime.now().strftime('%Y-%m-%d_%H.%M.%S')
@@ -134,12 +136,20 @@ class SegmentationTrainingApp:
        # self.device = torch.device("mps" if self.use_mps1 and self.use_mps2 else "cpu")
 
         #self.model = self.initModel()
+        print(f"PyTorch version: {torch.__version__}")
 
-        self.use_cuda = torch.cuda.is_available()
-        self.device = torch.device("cuda" if self.use_cuda else "cpu")
+    # Check PyTorch has access to MPS (Metal Performance Shader, Apple's GPU architecture)
+        print(f"Is MPS (Metal Performance Shader) built? {torch.backends.mps.is_built()}")
+        print(f"Is MPS available? {torch.backends.mps.is_available()}")
+
+        #self.use_cuda = torch.cuda.is_available()
+        #self.device = torch.device("cuda" if self.use_cuda else "cpu")
+        self.device = "mps" if torch.backends.mps.is_available() else "cpu"
+  
+        self.device = torch.device(self.device)
+        print(f"Using device: {self.device}")
         
         self.segmentation_model, self.augmentation_model = self.initModel() #<1>
-       # print(self.segmentation_model)
         self.optimizer = self.initOptimizer() #<3>
         
 
@@ -156,18 +166,17 @@ class SegmentationTrainingApp:
         )
          #<2>) 
 
-
-
-
         augmentation_model = SegmentationAugmentation(**self.augmentation_dict)
-
+        """
         if self.use_cuda:
             log.info("Using CUDA; {} devices.".format(torch.cuda.device_count()))
             if torch.cuda.device_count() > 1:
                 segmentation_model = nn.DataParallel(segmentation_model)
                 augmentation_model = nn.DataParallel(augmentation_model)
-            segmentation_model = segmentation_model.to(self.device)
-            augmentation_model = augmentation_model.to(self.device)
+         """
+        segmentation_model = segmentation_model.to(self.device)
+        augmentation_model = augmentation_model.to(self.device)
+        
 
         return segmentation_model, augmentation_model
 
@@ -187,16 +196,16 @@ class SegmentationTrainingApp:
             contextSlices_count=3,
 
         )
-        #print(train_ds)
+
         batch_size = self.cli_args.batch_size
-        if self.use_cuda:
-            batch_size *= torch.cuda.device_count()
-        #print(batch_size)
+        #if self.use_cuda:
+         #   batch_size *= torch.cuda.device_count()
+      
         train_dl = DataLoader(
             train_ds,
             batch_size=batch_size,
             num_workers=self.cli_args.num_workers,
-            pin_memory= self.use_cuda,
+            #pin_memory= self.use_cuda,
            # pin_memory=(self.use_mps1 and self.use_mps2) ,
         )
 
@@ -217,34 +226,33 @@ class SegmentationTrainingApp:
             val_ds,
             batch_size=batch_size,
             num_workers=self.cli_args.num_workers,
-            pin_memory=self.use_cuda,
+            #pin_memory=self.use_cuda,
             #pin_memory= (self.use_mps1 and self.use_mps2),
         )
 
         return val_dl
     
+
     def initTensorboardWriters(self):
         if self.trn_writer is None:
             log_dir = os.path.join('runs', self.cli_args.tb_prefix, self.time_str)
-
             self.trn_writer = SummaryWriter(
-                log_dir=log_dir + '-trn_cls-' + self.cli_args.comment)
+                log_dir=log_dir + '_trn_seg_' + self.cli_args.comment)
+            print(self.trn_writer)
             self.val_writer = SummaryWriter(
-                log_dir=log_dir + '-val_cls-' + self.cli_args.comment)
+                log_dir=log_dir + '_val_seg_' + self.cli_args.comment)
 
 
     def main(self):
         log.info("Starting {}, {}".format(type(self).__name__, self.cli_args))
 
         train_dl = self.initTrainDl()
-       #print(train_dl)
         val_dl = self.initValDl()
+
         best_score = 0.0
         self.validation_cadence = 5
 
-        
         for epoch_ndx in range(1, self.cli_args.epochs + 1):
-
             log.info("Epoch {} of {}, {}/{} batches of size {}*{}".format(
                 epoch_ndx,
                 self.cli_args.epochs,
@@ -254,15 +262,64 @@ class SegmentationTrainingApp:
                 1,
             ))
             trnMetrics_t = self.doTraining(epoch_ndx, train_dl)
-            #print(trnMetrics_t)
             self.logMetrics(epoch_ndx, 'trn', trnMetrics_t)
+            print("Logged metrics for trn.")
+            if epoch_ndx == 1 or epoch_ndx % self.validation_cadence == 0:
+                # if validation is wanted
+                valMetrics_t = self.doValidation(epoch_ndx, val_dl)
+                score = self.logMetrics(epoch_ndx, 'val', valMetrics_t)
+                best_score = max(score, best_score)
+                self.saveModel('seg', epoch_ndx, score == best_score) #<12>
+                print('Saved model')
+                self.logImages(epoch_ndx, 'trn', train_dl) #<10>
+                self.logImages(epoch_ndx, 'val', val_dl) 
+        #self.trn_writer.close()
+        #self.val_writer.close()
+          
+    def saveModel(self, type_str, epoch_ndx, isBest=False):
+        file_path = os.path.join(
+            'data-unversioned',
+            'part2',
+            'models',
+            self.cli_args.tb_prefix,
+            '{}_{}_{}.{}.state'.format(
+                type_str,
+                self.time_str,
+                self.cli_args.comment,
+                self.totalTrainingSamples_count,
+            )
+        )
+        os.makedirs(os.path.dirname(file_path), mode=0o755, exist_ok=True)
+        model = self.segmentation_model
+        state = {
+            'sys_argv': sys.argv,
+            'time': str(datetime.datetime.now()),
+            'model_state': model.state_dict(),
+            'model_name': type(model).__name__,
+            'optimizer_state' : self.optimizer.state_dict(),
+            'optimizer_name': type(self.optimizer).__name__,
+            'epoch': epoch_ndx,
+            'totalTrainingSamples_count': self.totalTrainingSamples_count,
+        } #<a>
+        torch.save(state, file_path) #<b>
 
-            valMetrics_t = self.doValidation(epoch_ndx, val_dl)
-            self.logMetrics(epoch_ndx, 'val', valMetrics_t)
+        log.info("Saved model params to {}".format(file_path))
 
-       # if hasattr(self, 'trn_writer'):
-        self.trn_writer.close()
-        self.val_writer.close()
+        if isBest:
+            best_path = os.path.join(
+                'data-unversioned', 'part2', 'models',
+                self.cli_args.tb_prefix,
+                f'{type_str}_{self.time_str}_{self.cli_args.comment}.best.state')
+            shutil.copyfile(file_path, best_path) #<c>
+
+            log.info("Saved model params to {}".format(best_path))
+
+        with open(file_path, 'rb') as f:
+            log.info("SHA1: " + hashlib.sha1(f.read()).hexdigest()) #<d>
+     
+
+
+
 
 
     def doTraining(self, epoch_ndx, train_dl):
@@ -273,17 +330,15 @@ class SegmentationTrainingApp:
             device=self.device,
         )
         self.segmentation_model.train()
-        #print(train_dl)
-        #train_dl.dataset.shuffleSamples()
+        train_dl.dataset.shuffleSamples()
+
+
         batch_iter = enumerateWithEstimate(
             train_dl,
             "E{} Training".format(epoch_ndx),
             start_ndx=train_dl.num_workers,
         )
-       #print(batch_iter)
         for batch_ndx, batch_tup in batch_iter:
-            #print(batch_tup)
-    
             self.optimizer.zero_grad()
 
             loss_var = self.computeBatchLoss(
@@ -292,27 +347,17 @@ class SegmentationTrainingApp:
                 train_dl.batch_size,
                 trnMetrics_g
             ) #<4>
-            #print(loss_var)
-           # print("After calling computeBatchLoss")
             loss_var.backward()
-            self.optimizer.step()
-
-            # # This is for adding the model graph to TensorBoard.
-            # if epoch_ndx == 1 and batch_ndx == 0:
-            #     with torch.no_grad():
-            #         model = LunaModel()
-            #         self.trn_writer.add_graph(model, batch_tup[0], verbose=True)
-            #         self.trn_writer.close()
-            #print("Finished batch iteration")
+           
+        
         self.totalTrainingSamples_count += trnMetrics_g.size(1)
-        print(self.totalTrainingSamples_count)
-
+        #print(self.totalTrainingSamples_count)
         return trnMetrics_g.to('cpu')
 
     
     def doValidation(self, epoch_ndx, val_dl):
         with torch.no_grad():
-            self.model.eval()
+            self.segmentation_model.eval()
             valMetrics_g = torch.zeros(
                 METRICS_SIZE,
                 len(val_dl.dataset),
@@ -336,17 +381,35 @@ class SegmentationTrainingApp:
 
 
     def computeBatchLoss(self, batch_ndx, batch_tup, batch_size, metrics_g,classificationThreshold=0.5):
+        
         input_t, label_t, _series_list, _slice_ndx_list = batch_tup
 
         input_g = input_t.to(self.device, non_blocking=True)
         label_g = label_t.to(self.device, non_blocking=True) 
 
         if self.segmentation_model.training and self.augmentation_dict:
+
             input_g, label_g = self.augmentation_model(input_g, label_g)
         prediction_g = self.segmentation_model(input_g) #<5>
+        print(prediction_g)
         diceLoss_g = self.diceLoss(prediction_g, label_g) #<6>
-        fnLoss_g = self.diceLoss(prediction_g * label_g, label_g)
-        return diceLoss_g.mean() + fnLoss_g.mean() * 8 #<7>
+        fnLoss_g = self.diceLoss(prediction_g * label_g, label_g) #<7>
+        start_ndx = batch_ndx * batch_size
+        end_ndx = start_ndx + input_t.size(0)
+        with torch.no_grad():
+            predictionBool_g = (prediction_g[:, 0:1]
+                                > classificationThreshold).to(torch.float32)
+
+            tp = (     predictionBool_g *  label_g).sum(dim=[1,2,3])
+            fn = ((1 - predictionBool_g) *  label_g).sum(dim=[1,2,3])
+            fp = (     predictionBool_g * (~label_g)).sum(dim=[1,2,3])
+
+            metrics_g[METRICS_LOSS_NDX, start_ndx:end_ndx] = diceLoss_g
+            metrics_g[METRICS_TP_NDX, start_ndx:end_ndx] = tp
+            metrics_g[METRICS_FN_NDX, start_ndx:end_ndx] = fn
+            metrics_g[METRICS_FP_NDX, start_ndx:end_ndx] = fp#<8>
+        #print(metrics_g)
+        return diceLoss_g.mean() + fnLoss_g.mean() * 8 #<9>
     
 
 
@@ -357,160 +420,162 @@ class SegmentationTrainingApp:
 
         diceRatio_g = (2 * diceCorrect_g + epsilon) \
             / (dicePrediction_g + diceLabel_g + epsilon)
-        print(diceRatio_g)
+        #print(diceRatio_g)
         return 1 - diceRatio_g
+
+
+
+    def logImages(self, epoch_ndx, mode_str, dl): #<10>
+        self.segmentation_model.eval() #<a>
+        
+        images = sorted(dl.dataset.series_list)[:12] #<b>
+       # print(images)
+        for series_ndx, series_uid in enumerate(images):
+            ct = getCt(series_uid)
+
+            for slice_ndx in range(6):
+                ct_ndx = slice_ndx * (ct.hu_a.shape[0] - 1) // 5 
+                sample_tup = dl.dataset.getitem_fullSlice(series_uid, ct_ndx)
+
+                ct_t, label_t, series_uid, ct_ndx = sample_tup #<c>
+
+                input_g = ct_t.to(self.device).unsqueeze(0)
+                label_g = pos_g = label_t.to(self.device).unsqueeze(0)
+
+                prediction_g = self.segmentation_model(input_g)[0]
+                prediction_a = prediction_g.to('cpu').detach().numpy()[0] > 0.5
+                label_a = label_g.cpu().numpy()[0][0] > 0.5
+
+                ct_t[:-1,:,:] /= 2000 #<d>
+                ct_t[:-1,:,:] += 0.5
+
+                ctSlice_a = ct_t[dl.dataset.contextSlices_count].numpy()
+
+                image_a = np.zeros((512, 512, 3), dtype=np.float32)
+                image_a[:,:,:] = ctSlice_a.reshape((512,512,1)) #<e> 
+                image_a[:,:,0] += prediction_a & (1 - label_a) #<f> FP
+                image_a[:,:,0] += (1 - prediction_a) & label_a # <f> FN
+
+                image_a[:,:,1] += ((1 - prediction_a) & label_a) * 0.5 #<g>
+                image_a[:,:,1] += prediction_a & label_a
+                image_a *= 0.5
+                image_a.clip(0, 1, image_a)
+
+                writer = getattr(self, mode_str + '_writer')
+                writer.add_image(
+                    f'{mode_str}/{series_ndx}_prediction_{slice_ndx}',
+                    image_a,
+                    self.totalTrainingSamples_count,
+                    dataformats='HWC',
+                )
+                if epoch_ndx == 1:
+                    image_a = np.zeros((512, 512, 3), dtype=np.float32)
+                    image_a[:,:,:] = ctSlice_a.reshape((512,512,1))
+                    # image_a[:,:,0] += (1 - label_a) & lung_a # Red
+                    image_a[:,:,1] += label_a  # Green
+                    # image_a[:,:,2] += neg_a  # Blue
+
+                    image_a *= 0.5
+                    image_a[image_a < 0] = 0
+                    image_a[image_a > 1] = 1
+                    writer.add_image(
+                        '{}/{}_label_{}'.format(
+                            mode_str,
+                            series_ndx,
+                            slice_ndx,
+                        ),
+                        image_a,
+                        self.totalTrainingSamples_count,
+                        dataformats='HWC',
+                    )
+                writer.flush()
+
+      
+
+
 
     def logMetrics(
             self,
             epoch_ndx,
             mode_str,
             metrics_t,
-            classificationThreshold=0.5,
-    ):
-        self.initTensorboardWriters()
+    ): #<11>
         log.info("E{} {}".format(
             epoch_ndx,
             type(self).__name__,
         ))
 
-        negLabel_mask = metrics_t[METRICS_LABEL_NDX] <= classificationThreshold
-        negPred_mask = metrics_t[METRICS_PRED_NDX] <= classificationThreshold
+        metrics_a = metrics_t.detach().numpy()
+        sum_a = metrics_a.sum(axis=1)
 
-        posLabel_mask = ~negLabel_mask
-        posPred_mask = ~negPred_mask
-        #print(mode_str)
-        neg_count = int(negLabel_mask.sum())
-        pos_count = int(posLabel_mask.sum())
-        #print(pos_count)
-        trueNeg_count = neg_correct = int((negLabel_mask & negPred_mask).sum())
-        truePos_count = pos_correct = int((posLabel_mask & posPred_mask).sum())
+        #print(sum_a)
 
-        falsePos_count = neg_count - neg_correct
-        falseNeg_count = pos_count - pos_correct
-
+        assert np.isfinite(metrics_a).all()
+       
+        allLabel_count = sum_a[METRICS_TP_NDX] + sum_a[METRICS_FN_NDX]
 
         metrics_dict = {}
-        metrics_dict['loss/all'] = \
-            metrics_t[METRICS_LOSS_NDX].mean()
-        metrics_dict['loss/neg'] = \
-            metrics_t[METRICS_LOSS_NDX, negLabel_mask].mean()
-        metrics_dict['loss/pos'] = \
-            metrics_t[METRICS_LOSS_NDX, posLabel_mask].mean()
+        metrics_dict['loss/all'] = metrics_a[METRICS_LOSS_NDX].mean() #<a>
 
-        metrics_dict['correct/all'] = (pos_correct + neg_correct) \
-            / np.float32(metrics_t.shape[1]) * 100
-        metrics_dict['correct/neg'] = neg_correct / np.float32(neg_count) * 100
-        metrics_dict['correct/pos'] = pos_correct / np.float32(pos_count) * 100
+        metrics_dict['percent_all/tp'] = \
+            sum_a[METRICS_TP_NDX] / (allLabel_count or 1) * 100 #<b>
+        metrics_dict['percent_all/fn'] = \
+            sum_a[METRICS_FN_NDX] / (allLabel_count or 1) * 100 #<c>
+        metrics_dict['percent_all/fp'] = \
+            sum_a[METRICS_FP_NDX] / (allLabel_count or 1) * 100 #<d>
+        print(metrics_dict)
 
-        #Improved metrics 
-        precision = metrics_dict['pr/precision'] = \
-            truePos_count / np.float32(truePos_count + falsePos_count)
-        recall    = metrics_dict['pr/recall'] = \
-            truePos_count / np.float32(truePos_count + falseNeg_count)
 
-        metrics_dict['pr/f1_score'] = \
-            2 * (precision * recall) / (precision + recall)
+         #Main metrics 
+        precision = metrics_dict['pr/precision'] = sum_a[METRICS_TP_NDX] \
+            / ((sum_a[METRICS_TP_NDX] + sum_a[METRICS_FP_NDX]) or 1)
+        recall    = metrics_dict['pr/recall']    = sum_a[METRICS_TP_NDX] \
+            / ((sum_a[METRICS_TP_NDX] + sum_a[METRICS_FN_NDX]) or 1)
+
+        metrics_dict['pr/f1_score'] = 2 * (precision * recall) \
+            / ((precision + recall) or 1)
         
 
-
-        log.info(
-            ("E{} {:8} {loss/all:.4f} loss, "
-                 + "{correct/all:-5.1f}% correct, "
+        log.info(("E{} {:8} "
+                 + "{loss/all:.4f} loss, "
                  + "{pr/precision:.4f} precision, "
                  + "{pr/recall:.4f} recall, "
                  + "{pr/f1_score:.4f} f1 score"
-            ).format(
-                epoch_ndx,
-                mode_str,
-                **metrics_dict,
-            )
-        )
-        log.info(
-            ("E{} {:8} {loss/neg:.4f} loss, "
-                 + "{correct/neg:-5.1f}% correct ({neg_correct:} of {neg_count:})"
-            ).format(
-                epoch_ndx,
-                mode_str + '_neg',
-                neg_correct=neg_correct,
-                neg_count=neg_count,
-                **metrics_dict,
-            )
-        )
-        log.info(
-            ("E{} {:8} {loss/pos:.4f} loss, "
-                 + "{correct/pos:-5.1f}% correct ({pos_correct:} of {pos_count:})"
-            ).format(
-                epoch_ndx,
-                mode_str + '_pos',
-                pos_correct=pos_correct,
-                pos_count=pos_count,
-                **metrics_dict,
-            )
-        )
+                  ).format(
+            epoch_ndx,
+            mode_str,
+            **metrics_dict,
+        ))
 
+
+        log.info(("E{} {:8} "
+                  + "{loss/all:.4f} loss, "
+                  + "{percent_all/tp:-5.1f}% tp, {percent_all/fn:-5.1f}% fn, {percent_all/fp:-9.1f}% fp"
+        ).format(
+            epoch_ndx,
+            mode_str + '_all',
+            **metrics_dict,
+        ))
+
+        """
+        self.initTensorboardWriters() #<e>
         writer = getattr(self, mode_str + '_writer')
 
+        prefix_str = 'seg_'
+
         for key, value in metrics_dict.items():
-            writer.add_scalar(key, value, self.totalTrainingSamples_count)
+            writer.add_scalar(prefix_str + key, value, self.totalTrainingSamples_count)
 
-        writer.add_pr_curve(
-            'pr',
-            metrics_t[METRICS_LABEL_NDX],
-            metrics_t[METRICS_PRED_NDX],
-            self.totalTrainingSamples_count,
-        )
+        writer.flush()
+        """
+        score = metrics_dict['pr/recall']
+       
 
-        bins = [x/50.0 for x in range(51)]
+        return score
 
-        negHist_mask = negLabel_mask & (metrics_t[METRICS_PRED_NDX] > 0.01)
-        posHist_mask = posLabel_mask & (metrics_t[METRICS_PRED_NDX] < 0.99)
+        
 
-        if negHist_mask.any():
-            writer.add_histogram(
-                'is_neg',
-                metrics_t[METRICS_PRED_NDX, negHist_mask],
-                self.totalTrainingSamples_count,
-                bins=bins,
-            )
-        if posHist_mask.any():
-            writer.add_histogram(
-                'is_pos',
-                metrics_t[METRICS_PRED_NDX, posHist_mask],
-                self.totalTrainingSamples_count,
-                bins=bins,
-            )
-
-        # score = 1 \
-        #     + metrics_dict['pr/f1_score'] \
-        #     - metrics_dict['loss/mal'] * 0.01 \
-        #     - metrics_dict['loss/all'] * 0.0001
-        #
-        # return score
-
-    # def logModelMetrics(self, model):
-    #     writer = getattr(self, 'trn_writer')
-    #
-    #     model = getattr(model, 'module', model)
-    #
-    #     for name, param in model.named_parameters():
-    #         if param.requires_grad:
-    #             min_data = float(param.data.min())
-    #             max_data = float(param.data.max())
-    #             max_extent = max(abs(min_data), abs(max_data))
-    #
-    #             # bins = [x/50*max_extent for x in range(-50, 51)]
-    #
-    #             try:
-    #                 writer.add_histogram(
-    #                     name.rsplit('.', 1)[-1] + '/' + name,
-    #                     param.data.cpu().numpy(),
-    #                     # metrics_a[METRICS_PRED_NDX, negHist_mask],
-    #                     self.totalTrainingSamples_count,
-    #                     # bins=bins,
-    #                 )
-    #             except Exception as e:
-    #                 log.error([min_data, max_data])
-    #                 raise
+    
 
 
     

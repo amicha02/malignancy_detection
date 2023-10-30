@@ -42,7 +42,6 @@ def importstr(module_str, from_=None):
     """
     if from_ is None and ':' in module_str:
         module_str, from_ = module_str.rsplit(':')
-
     module = __import__(module_str)
     for sub_str in module_str.split('.')[1:]:
         module = getattr(module, sub_str)
