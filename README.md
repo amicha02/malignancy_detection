@@ -31,4 +31,6 @@ The Manning site for the book is: https://www.manning.com/books/deep-learning-wi
 
 The book can also be purchased on Amazon: https://amzn.to/38Iwrff (affiliate link; as per the rules: "As an Amazon Associate I earn from qualifying purchases.")
 
-The errata for the book can be found on the manning website, or at https://deep-learning-with-pytorch.github.io/dlwpt-code/errata.html
+
+# Data 
+The data can be accessed [here](https://luna16.grand-challenge.org/Data/). For our implementation, we only used subset0.

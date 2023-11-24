@@ -93,7 +93,7 @@ class ClassificationTrainingApp:
         self.totalTrainingSamples_count = 0
 
         self.augmentation_dict = {}
-        if False:
+        """
         # if self.cli_args.augmented or self.cli_args.augment_flip:
             self.augmentation_dict['flip'] = True
         # if self.cli_args.augmented or self.cli_args.augment_offset:
@@ -104,7 +104,7 @@ class ClassificationTrainingApp:
             self.augmentation_dict['rotate'] = True
         # if self.cli_args.augmented or self.cli_args.augment_noise:
             self.augmentation_dict['noise'] = 25.0
-
+        """
         self.use_cuda = torch.cuda.is_available()
         self.device = torch.device("cuda" if self.use_cuda else "cpu")
 
@@ -222,8 +222,6 @@ class ClassificationTrainingApp:
                 valMetrics_t = self.doValidation(epoch_ndx, val_dl)
                 score = self.logMetrics(epoch_ndx, 'val', valMetrics_t)
                 best_score = max(score, best_score)
-
-                # TODO: this 'cls' will need to change for the malignant classifier
                 self.saveModel('cls', epoch_ndx, score == best_score)
 
         
