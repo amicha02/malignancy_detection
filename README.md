@@ -1,4 +1,4 @@
-# Project Name
+# LUNA Data Challenge - Tumor Malignancy Prediction
 
 ## Overview
 
